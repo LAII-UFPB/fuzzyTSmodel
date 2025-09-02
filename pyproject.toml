@@ -1,0 +1,13 @@
+[project]
+name = "fuzzytsmodel"
+version = "0.1.0"
+description = "Fuzzy model with automatic rule selection for time series forecasting"
+authors = [{ name = "Vitor França", email = "vitor.sousa.franca@gmail.com" }]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "simpful",
+    "matplotlib",
+]
