@@ -6,13 +6,13 @@ from simpful import FuzzySystem, AutoTriangle, LinguisticVariable
 class FuzzyVariableManager:
     """Manages fuzzy variables (inputs and outputs)."""
 
-    def __init__(self, num_regions, input_range, output_range):
+    def __init__(self, num_regions:int, input_range:list, output_range:list):
         self.num_regions = num_regions
         self.input_range = input_range
         self.output_range = output_range
         self.variables = {}
 
-    def create_variable(self, name: str, is_output=False):
+    def create_variable(self, name: str, is_output: bool =False) -> LinguisticVariable:
         """Create fuzzy variable based on Auto Triangle and convert to Linguistic Variable."""
         universe = self.output_range if is_output else self.input_range
         regions = 2 * self.num_regions + 1
@@ -38,7 +38,7 @@ class FuzzyVariableManager:
         self.variables[name] = lv
         return lv
 
-    def get(self, name):
+    def get(self, name:str) -> LinguisticVariable:
         return self.variables[name]
 
 
@@ -50,7 +50,7 @@ class FuzzyRuleManager:
         self.weights = []
 
     @staticmethod
-    def strong_pertinence(var, value):
+    def strong_pertinence(var:LinguisticVariable, value:float) -> tuple[str,float]:
         """Selects the term with the highest relevance to a value."""
         values = var.get_values(value)
         terms = list(values.keys())
@@ -60,7 +60,7 @@ class FuzzyRuleManager:
         return strong_term, value_term
 
     @staticmethod
-    def build_rule(input_names, output_name, terms):
+    def build_rule(input_names: list[str], output_name: str, terms: str) -> str:
         """Creates rule string in simpful-compatible format."""
         rule_string = "IF "
         for i, name in enumerate(input_names):
@@ -69,7 +69,8 @@ class FuzzyRuleManager:
         return rule_string
 
 
-    def update_rules(self, input_vars, output_var, values_io, var_names):
+    def update_rules(self, input_vars: list[LinguisticVariable], output_var: LinguisticVariable,
+                      values_io:list[float], var_names:list[str]) -> None:
         """Updates rule base (same as original rules_database)."""
         terms_list, weight_list = [], []
 
@@ -97,7 +98,7 @@ class FuzzyRuleManager:
 class FuzzyTSModel:
     """Fuzzy model for time series forecasting."""
 
-    def __init__(self, input_names, output_name, num_regions, input_range, output_range):
+    def __init__(self, input_names:list, output_name:str, num_regions:int, input_range:list, output_range:list):
         self.input_names = input_names
         self.output_name = output_name
         self.var_manager = FuzzyVariableManager(num_regions, input_range, output_range)
@@ -116,7 +117,7 @@ class FuzzyTSModel:
         # Useful variables
         self.X_train_dim = None
 
-    def fit(self, X, y):
+    def fit(self, X:np.ndarray, y:np.ndarray) -> None:
         """Learn fuzzy rules from data."""
         
         assert X.shape[0] == y.shape[0], f"The first dimension of X should be equals to the first dimension of y,\
@@ -131,7 +132,7 @@ class FuzzyTSModel:
                                            self.input_names + [self.output_name])
         self.fs.add_rules(self.rule_manager.rules)
 
-    def predict(self, X):
+    def predict(self, X:np.ndarray) -> np.ndarray:
         assert X.shape[1:] == self.X_train_dim[1:], f"The input X dimensions {X.shape[1:]} are different\
               from the train input dimensions {self.X_train_dim[1:]}"
         
@@ -143,5 +144,5 @@ class FuzzyTSModel:
             predictions.append(result[self.output_name])
         return np.array(predictions)
 
-    def explain(self):
+    def explain(self) -> list[str]:
         return self.rule_manager.rules

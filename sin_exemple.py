@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from fuzzyTSmodel.fuzzymodel import FuzzyTSModel
+from fuzzymodel import FuzzyTSModel
 
 # Dataset creation: Using a sine wave with 3 shifts to the left as input variables
 # and the original sine wave as output variable
