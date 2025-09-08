@@ -8,8 +8,8 @@ from simpful import FuzzySystem, AutoTriangle, LinguisticVariable
 class FuzzyVariableManager:
     """Manages fuzzy variables (inputs and outputs)."""
 
-    def __init__(self, num_regions:int, input_range:list, output_range:list):
-        self.num_regions = num_regions
+    def __init__(self, N:int, input_range:list, output_range:list):
+        self.N = N
         self.input_range = input_range
         self.output_range = output_range
         self.variables = {}
@@ -17,15 +17,15 @@ class FuzzyVariableManager:
     def create_variable(self, name: str, is_output: bool =False) -> LinguisticVariable:
         """Create fuzzy variable based on Auto Triangle and convert to Linguistic Variable."""
         universe = self.output_range if is_output else self.input_range
-        regions = 2 * self.num_regions + 1
+        regions = 2 * self.N + 1
 
         # regions names
         terms = []
         for i in range(regions):
-            if i < self.num_regions:
-                terms.append(f"S{abs(i - self.num_regions)}")
-            elif i > self.num_regions:
-                terms.append(f"B{abs(i - self.num_regions)}")
+            if i < self.N:
+                terms.append(f"S{abs(i - self.N)}")
+            elif i > self.N:
+                terms.append(f"B{abs(i - self.N)}")
             else:
                 terms.append("Z")
 
@@ -156,10 +156,10 @@ class FuzzyRuleManager:
 class FuzzyTSModel:
     """Fuzzy model for time series forecasting."""
 
-    def __init__(self, input_names:list, output_name:str, num_regions:int, input_range:list, output_range:list):
+    def __init__(self, input_names:list, output_name:str, N:int, input_range:list, output_range:list):
         self.input_names = input_names
         self.output_name = output_name
-        self.var_manager = FuzzyVariableManager(num_regions, input_range, output_range)
+        self.var_manager = FuzzyVariableManager(N, input_range, output_range)
         self.rule_manager = FuzzyRuleManager()
         self.fs = FuzzySystem(show_banner=False)
 
