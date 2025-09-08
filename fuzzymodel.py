@@ -1,5 +1,6 @@
 import numpy as np
 from functools import reduce
+from sklearn.metrics import mean_absolute_error, r2_score
 from simpful import FuzzySystem, AutoTriangle, LinguisticVariable
 
 
@@ -134,11 +135,13 @@ class FuzzyRuleManager:
         
         if self.prune_count >= self.prune_window:
             to_remove = [i for i, count in enumerate(self.usage_count) if count <= self.prune_use_threshold]
-            print(f"Pruning {len(to_remove)} rules out of {len(self.rules)}")
-            for idx in sorted(to_remove, reverse=True):
-                del self.rules[idx]
-                del self.weights[idx]
-                del self.usage_count[idx]
+            if len(to_remove) > 0:
+                print(f"Pruning {len(to_remove)} rules out of {len(self.rules)} -> {len(self.rules) - len(to_remove)} remaining.")
+                for idx in sorted(to_remove, reverse=True):
+                    del self.rules[idx]
+                    del self.weights[idx]
+                    del self.usage_count[idx]
+
             # After each pruning, reset usage counts
             self.usage_count = [0 for _ in self.rules]
             self.prune_count = 0
@@ -218,3 +221,19 @@ class FuzzyTSModel:
 
     def explain(self) -> list[str]:
         return self.rule_manager.rules
+
+    def score(self, y_pred: np.ndarray, y_true: np.ndarray) -> dict:
+        """
+        Computes prediction error metrics: MAE, MAPE, RMSE and R2.
+        Args:
+            y_pred (np.ndarray): Predict output values.
+            y_true (np.ndarray): True output values.
+        Returns:
+            dict: Dictionary with error metrics.
+        """
+        mae = mean_absolute_error(y_true, y_pred)
+        mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+        rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
+        r2 = r2_score(y_true, y_pred)
+        return {"MAE": mae, "MAPE": mape, "RMSE": rmse, "R2": r2}
+
