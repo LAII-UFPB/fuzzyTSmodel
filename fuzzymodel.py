@@ -1,5 +1,6 @@
 import numpy as np
 from functools import reduce
+from tqdm import tqdm
 from sklearn.metrics import mean_absolute_error, r2_score
 from simpful import FuzzySystem, AutoTriangle, LinguisticVariable
 
@@ -127,7 +128,7 @@ class FuzzyRuleManager:
             if weight > self.prune_weight_threshold:
                 self.usage_count[idx] += 1
 
-    def prune_unused_rules(self):
+    def prune_unused_rules(self) -> bool:
         """
         Remove not used rules based on a sliding window approach.
         Note: This method should be called after each prediction.
@@ -136,7 +137,7 @@ class FuzzyRuleManager:
         if self.prune_count >= self.prune_window:
             to_remove = [i for i, count in enumerate(self.usage_count) if count <= self.prune_use_threshold]
             if len(to_remove) > 0:
-                print(f"Pruning {len(to_remove)} rules out of {len(self.rules)} -> {len(self.rules) - len(to_remove)} remaining.")
+                tqdm.write(f"Pruning {len(to_remove)} rules out of {len(self.rules)} -> {len(self.rules) - len(to_remove)} remaining.")
                 for idx in sorted(to_remove, reverse=True):
                     del self.rules[idx]
                     del self.weights[idx]
@@ -145,8 +146,11 @@ class FuzzyRuleManager:
             # After each pruning, reset usage counts
             self.usage_count = [0 for _ in self.rules]
             self.prune_count = 0
+            
+            return True
         else:
             self.prune_count += 1
+            return False
 
 
 class FuzzyTSModel:
@@ -180,7 +184,7 @@ class FuzzyTSModel:
 
         self.X_train_dim = X.shape
 
-        for xi, yi in zip(X, y):
+        for xi, yi in tqdm(zip(X, y), total=X.shape[0], desc="Fitting model"):
             values_io = list(xi) + [yi]
             self.rule_manager.update_rules(self.input_vars, self.output_var, values_io,
                                            self.input_names + [self.output_name])
@@ -201,7 +205,7 @@ class FuzzyTSModel:
               from the train input dimensions {self.X_train_dim[1:]}"
         
         predictions = []
-        for xi in X:
+        for xi in tqdm(X, total=X.shape[0], desc="Predicting"):
             # Set input values
             for name, val in zip(self.input_names, xi):
                 self.fs.set_variable(name, val)
@@ -210,9 +214,12 @@ class FuzzyTSModel:
             result = self.fs.inference()
                         
             # Register rule usage and prune unused rules
-            #print(np.argmax(self.rule_manager.weights))
             self.rule_manager.register_rule_usage()
-            self.rule_manager.prune_unused_rules()
+            if self.rule_manager.prune_unused_rules():
+                # Update the rules in the FuzzySystem after pruning
+                assert len(self.rule_manager.rules) > 0, "All rules were pruned. Adjust pruning parameters." 
+                self.fs._rules.clear()
+                self.fs.add_rules(self.rule_manager.rules)
             
             # Get the prediction
             predictions.append(result[self.output_name])
