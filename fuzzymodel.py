@@ -45,10 +45,31 @@ class FuzzyVariableManager:
 class FuzzyRuleManager:
     """Manages a fuzzy rule base."""
 
-    def __init__(self):
+    def __init__(self, prune_weight_threshold:float=0.1, prune_use_threshold:int=0, prune_window:int=15):
+        """
+        Args:
+            prune_weight_threshold (float): Minimum weight for a rule to be considered used.
+            prune_use_threshold (int): Minimum number of uses for a rule to be retained.
+            prune_window (int): Number of predictions after which to evaluate rule usage.
+        Returns:
+            None
+        """
+
         self.rules = []
         self.weights = []
+        self.usage_count = []
+        self.prune_count = 0
 
+        # Pruning parameters
+        self.prune_weight_threshold = prune_weight_threshold
+        self.prune_use_threshold = prune_use_threshold
+        self.prune_window = prune_window
+
+        assert self.prune_weight_threshold >= 0, "prune_weight_threshold must be non-negative"
+        assert self.prune_use_threshold >= 0, "prune_use_threshold must be non-negative"
+        assert self.prune_window > 0, "prune_window must be positive"
+        assert self.prune_window > self.prune_use_threshold, "prune_window must be greater than prune_use_threshold"
+        
     @staticmethod
     def strong_pertinence(var:LinguisticVariable, value:float) -> tuple[str,float]:
         """Selects the term with the highest relevance to a value."""
@@ -86,6 +107,7 @@ class FuzzyRuleManager:
         if not any(new_rule[:new_rule.find('THEN')] in item for item in self.rules) or len(self.rules) == 0:
             self.rules.append(new_rule)
             self.weights.append(new_weight)
+            self.usage_count.append(0)
         else:
             arr = np.array(self.rules)
             mask = np.core.defchararray.find(arr.astype(str), new_rule[:new_rule.find('THEN')])
@@ -93,6 +115,35 @@ class FuzzyRuleManager:
             if new_weight > old_weight:
                 self.rules[mask[0]] = new_rule
                 self.weights[mask[0]] = new_weight
+
+    def register_rule_usage(self) -> None:
+        """
+        Increment usage count for rules with weights above a certain threshold.
+        Note: This method should be called after each prediction.
+        """
+        
+        for idx, weight in enumerate(self.weights):
+            if weight > self.prune_weight_threshold:
+                self.usage_count[idx] += 1
+
+    def prune_unused_rules(self):
+        """
+        Remove not used rules based on a sliding window approach.
+        Note: This method should be called after each prediction.
+        """
+        
+        if self.prune_count >= self.prune_window:
+            to_remove = [i for i, count in enumerate(self.usage_count) if count <= self.prune_use_threshold]
+            print(f"Pruning {len(to_remove)} rules out of {len(self.rules)}")
+            for idx in sorted(to_remove, reverse=True):
+                del self.rules[idx]
+                del self.weights[idx]
+                del self.usage_count[idx]
+            # After each pruning, reset usage counts
+            self.usage_count = [0 for _ in self.rules]
+            self.prune_count = 0
+        else:
+            self.prune_count += 1
 
 
 class FuzzyTSModel:
@@ -133,15 +184,36 @@ class FuzzyTSModel:
         self.fs.add_rules(self.rule_manager.rules)
 
     def predict(self, X:np.ndarray) -> np.ndarray:
+        """
+        Predict output for given input data.
+        
+        Args:
+            X (np.ndarray): Input data.
+        Returns:
+            np.ndarray: Predicted output values.
+        """
+
+
         assert X.shape[1:] == self.X_train_dim[1:], f"The input X dimensions {X.shape[1:]} are different\
               from the train input dimensions {self.X_train_dim[1:]}"
         
         predictions = []
         for xi in X:
+            # Set input values
             for name, val in zip(self.input_names, xi):
                 self.fs.set_variable(name, val)
+
+            # Perform inference
             result = self.fs.inference()
+                        
+            # Register rule usage and prune unused rules
+            #print(np.argmax(self.rule_manager.weights))
+            self.rule_manager.register_rule_usage()
+            self.rule_manager.prune_unused_rules()
+            
+            # Get the prediction
             predictions.append(result[self.output_name])
+        
         return np.array(predictions)
 
     def explain(self) -> list[str]:
