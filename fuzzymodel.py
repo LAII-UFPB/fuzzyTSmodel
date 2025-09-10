@@ -9,17 +9,34 @@ class FuzzyVariableManager:
     """Manages fuzzy variables (inputs and outputs)."""
 
     def __init__(self, N:int, input_range:list, output_range:list):
+        """
+        Args:
+            N (int): Number of fuzzy sets per variable (total sets = 2*N + 1)
+            input_range (list): [min, max] range for input variables
+            output_range (list): [min, max] range for output variable
+        """
+        assert N > 0, "N must be greater than 0"
+        assert len(input_range) == 2 and input_range[0] < input_range[1], \
+            "input_range must be [min, max] with min < max"
+        assert len(output_range) == 2 and output_range[0] < output_range[1], \
+            "output_range must be [min, max] with min < max"
+        
         self.N = N
         self.input_range = input_range
         self.output_range = output_range
         self.variables = {}
 
     def create_variable(self, name: str, is_output: bool =False) -> LinguisticVariable:
-        """Create fuzzy variable based on Auto Triangle and convert to Linguistic Variable."""
+        """
+        Create fuzzy variable based on Auto Triangle and convert to Linguistic Variable.
+        Args:
+            name (str): variable name
+            is_output (bool): whether variable is output
+        """
         universe = self.output_range if is_output else self.input_range
         regions = 2 * self.N + 1
 
-        # regions names
+        # region names (S=small, B=big, Z=zero)
         terms = []
         for i in range(regions):
             if i < self.N:
@@ -35,7 +52,6 @@ class FuzzyVariableManager:
             universe_of_discourse=universe
         )
 
-        # converts to LinguisticVariable (used by FuzzySystem)
         lv = LinguisticVariable(auto._FSlist, concept=name, universe_of_discourse=universe)
         self.variables[name] = lv
         return lv
