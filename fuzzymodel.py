@@ -204,13 +204,14 @@ class FuzzyRuleManager:
             return False
 
 class FuzzyTSModel:
-    """Fuzzy model for time series forecasting."""
+    """Fuzzy model for time series forecasting with adaptive rule management."""
 
-    def __init__(self, input_names:list, output_name:str, N:int, input_range:list, output_range:list):
+    def __init__(self, input_names:list, output_name:str, N:int, input_range:list, output_range:list,
+                 max_rules:int=None, aggregation_fun="product", error_threshold:float=0.05):
         self.input_names = input_names
         self.output_name = output_name
         self.var_manager = FuzzyVariableManager(N, input_range, output_range)
-        self.rule_manager = FuzzyRuleManager()
+        self.rule_manager = FuzzyRuleManager(max_rules=max_rules, aggregation_fun=aggregation_fun)
         self.fs = FuzzySystem(show_banner=False)
 
         # Create variables
@@ -222,16 +223,13 @@ class FuzzyTSModel:
         for name, var in zip(self.input_names, self.input_vars):
             self.fs.add_linguistic_variable(name, var)
         
-        # Useful variables
+
+        # Useful for adaptive pruning
         self.X_train_dim = None
 
     def fit(self, X:np.ndarray, y:np.ndarray) -> None:
-        """Learn fuzzy rules from data."""
-        
-        assert X.shape[0] == y.shape[0], f"The first dimension of X should be equals to the first dimension of y,\
-              instead X dimension is {X.shape} and y dimension is {y.shape} "
-        
-
+        """Batch learning of fuzzy rules from dataset."""
+        assert X.shape[0] == y.shape[0], "X and y must have same first dimension"
         self.X_train_dim = X.shape
 
         for xi, yi in tqdm(zip(X, y), total=X.shape[0], desc="Fitting model"):
@@ -240,57 +238,56 @@ class FuzzyTSModel:
                                            self.input_names + [self.output_name])
         self.fs.add_rules(self.rule_manager.rules)
 
-    def predict(self, X:np.ndarray) -> np.ndarray:
+    def partial_fit(self, xi:np.ndarray, yi:float) -> None:
+        """
+        Online update with a single sample (incremental learning).
+        Args:
+            xi (np.ndarray): Input vector
+            yi (float): Target value
+        """
+        values_io = list(xi) + [yi]
+        self.rule_manager.update_rules(self.input_vars, self.output_var, values_io,
+                                       self.input_names + [self.output_name])
+        self.fs._rules.clear()
+        self.fs.add_rules(self.rule_manager.rules)
+
+    def predict(self, X:np.ndarray, y_true:np.ndarray=None) -> np.ndarray:
         """
         Predict output for given input data.
-        
-        Args:
-            X (np.ndarray): Input data.
-        Returns:
-            np.ndarray: Predicted output values.
+        Optionally receives y_true to track error contribution for pruning.
         """
-
-
-        assert X.shape[1:] == self.X_train_dim[1:], f"The input X dimensions {X.shape[1:]} are different\
-              from the train input dimensions {self.X_train_dim[1:]}"
+        assert X.shape[1:] == self.X_train_dim[1:], "Input shape mismatch"
         
         predictions = []
-        for xi in tqdm(X, total=X.shape[0], desc="Predicting"):
-            # Set input values
+        for idx, xi in enumerate(tqdm(X, total=X.shape[0], desc="Predicting")):
             for name, val in zip(self.input_names, xi):
                 self.fs.set_variable(name, val)
-
-            # Perform inference
             result = self.fs.inference()
-                        
-            # Register rule usage and prune unused rules
-            self.rule_manager.register_rule_usage()
+            
+            y_pred = result[self.output_name]
+            predictions.append(y_pred)
+
+            # Rule usage + adaptive pruning
+            error = None
+            if y_true is not None:
+                error = y_true[idx] - y_pred
+
+            self.rule_manager.register_rule_usage(prediction_error=error)
             if self.rule_manager.prune_unused_rules():
-                # Update the rules in the FuzzySystem after pruning
-                assert len(self.rule_manager.rules) > 0, "All rules were pruned. Adjust pruning parameters." 
+                assert len(self.rule_manager.rules) > 0, "All rules were pruned. Adjust pruning parameters."
                 self.fs._rules.clear()
                 self.fs.add_rules(self.rule_manager.rules)
-            
-            # Get the prediction
-            predictions.append(result[self.output_name])
         
         return np.array(predictions)
 
     def explain(self) -> list[str]:
+        """Return current rule base as list of strings."""
         return self.rule_manager.rules
 
     def score(self, y_pred: np.ndarray, y_true: np.ndarray) -> dict:
-        """
-        Computes prediction error metrics: MAE, MAPE, RMSE and R2.
-        Args:
-            y_pred (np.ndarray): Predict output values.
-            y_true (np.ndarray): True output values.
-        Returns:
-            dict: Dictionary with error metrics.
-        """
+        """Compute prediction error metrics."""
         mae = mean_absolute_error(y_true, y_pred)
         mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
         rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
         r2 = r2_score(y_true, y_pred)
         return {"MAE": mae, "MAPE": mape, "RMSE": rmse, "R2": r2}
-
