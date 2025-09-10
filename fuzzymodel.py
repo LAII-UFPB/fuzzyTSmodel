@@ -223,7 +223,6 @@ class FuzzyTSModel:
         for name, var in zip(self.input_names, self.input_vars):
             self.fs.add_linguistic_variable(name, var)
         
-
         # Useful for adaptive pruning
         self.X_train_dim = None
 
@@ -291,3 +290,52 @@ class FuzzyTSModel:
         rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
         r2 = r2_score(y_true, y_pred)
         return {"MAE": mae, "MAPE": mape, "RMSE": rmse, "R2": r2}
+
+    def predict_and_update(self, X: np.ndarray, y_true: np.ndarray=None,
+                       abs_error_threshold: float=0.05, rel_error_threshold: float=None,
+                       verbose: bool=True) -> np.ndarray:
+        """
+        Predict and optionally update rules online if prediction error exceeds thresholds.
+        This version uses small batch prediction for efficiency.
+
+        Args:
+            X (np.ndarray): Input samples, shape (n_samples, n_features).
+            y_true (np.ndarray): Ground truth values, shape (n_samples,).
+            abs_error_threshold (float): Absolute error threshold for update.
+            rel_error_threshold (float): Relative error threshold (percentage). Optional.
+            verbose (bool): Whether to print updates when model learns online.
+        """
+        # Standard prediction
+        y_pred = self.predict(X)
+
+        # If no ground truth, return predictions only
+        if y_true is None:
+            return y_pred
+
+        # Compute errors in batch
+        abs_errors = np.abs(y_true - y_pred)
+
+        # Relative error only if requested
+        rel_errors = None
+        if rel_error_threshold is not None:
+            rel_errors = np.zeros_like(abs_errors)
+            nonzero_mask = np.abs(y_true) > 1e-8 # avoid division by zero
+            rel_errors[nonzero_mask] = abs_errors[nonzero_mask] / np.abs(y_true[nonzero_mask])
+
+        # Decide which samples trigger update
+        for xi, yi, yp, err in zip(X, y_true, y_pred, abs_errors):
+            update = False
+            if abs_error_threshold is not None and err > abs_error_threshold:
+                update = True
+            if rel_error_threshold is not None and rel_errors is not None:
+                idx = np.where(y_true == yi)[0][0]  # index of current sample
+                if rel_errors[idx] > rel_error_threshold:
+                    update = True
+
+            if update:
+                if verbose:
+                    tqdm.write(f"Updating model: y_true={yi}, y_pred={yp:.4f}, abs_err={err:.4f}")
+                self.partial_fit(xi, yi)
+
+        return y_pred
+
