@@ -67,7 +67,7 @@ model.rule_manager.prune_use_threshold = 2
 model.rule_manager.prune_window = 25
 
 # model prediction
-y_pred = model.predict(Xv)
+y_pred = model.predict_and_update(Xv, y_true=yv, abs_error_threshold=0.01)
 
 plt.title("Validation data: Real vs Fuzzy Predicted")
 plt.plot(yv, label="Real")
