@@ -61,36 +61,38 @@ class FuzzyVariableManager:
 
 
 class FuzzyRuleManager:
-    """Manages a fuzzy rule base."""
+    """Manages a fuzzy rule base with adaptive learning and forgetting."""
 
-    def __init__(self, prune_weight_threshold:float=0.1, prune_use_threshold:int=0, prune_window:int=15):
+    def __init__(self, prune_weight_threshold:float=0.1, prune_use_threshold:int=0,
+                 prune_window:int=15, max_rules:int=None, aggregation_fun="product"):
         """
         Args:
             prune_weight_threshold (float): Minimum weight for a rule to be considered used.
             prune_use_threshold (int): Minimum number of uses for a rule to be retained.
             prune_window (int): Number of predictions after which to evaluate rule usage.
-        Returns:
-            None
+            max_rules (int): Maximum number of rules to store. None = unlimited.
+            aggregation_fun (str or callable): Aggregation function for pertinence values
+                                               ("product", "min", "max", "arit_mean" or callable).
         """
 
         self.rules = []
         self.weights = []
         self.usage_count = []
+        self.error_contribution = []  # track per-rule contribution to error
         self.prune_count = 0
 
-        # Pruning parameters
         self.prune_weight_threshold = prune_weight_threshold
         self.prune_use_threshold = prune_use_threshold
         self.prune_window = prune_window
+        self.max_rules = max_rules
+        self.aggregation_fun = aggregation_fun
 
-        assert self.prune_weight_threshold >= 0, "prune_weight_threshold must be non-negative"
-        assert self.prune_use_threshold >= 0, "prune_use_threshold must be non-negative"
-        assert self.prune_window > 0, "prune_window must be positive"
-        assert self.prune_window > self.prune_use_threshold, "prune_window must be greater than prune_use_threshold"
+        assert self.prune_window > self.prune_use_threshold, \
+            "prune_window must be greater than prune_use_threshold"
         
     @staticmethod
     def strong_pertinence(var:LinguisticVariable, value:float) -> tuple[str,float]:
-        """Selects the term with the highest relevance to a value."""
+        """Selects the term with the highest membership degree for a value."""
         values = var.get_values(value)
         terms = list(values.keys())
         vals = list(values.values())
@@ -107,10 +109,24 @@ class FuzzyRuleManager:
         rule_string = rule_string[:-4] + f"THEN ({output_name} IS {terms[-1]})"
         return rule_string
 
+    def _aggregate_weights(self, weights:list[float]) -> float:
+        """Aggregate membership degrees according to selected aggregation function."""
+        if callable(self.aggregation_fun):
+            return self.aggregation_fun(weights)
+        elif self.aggregation_fun == "product":
+            return np.prod(weights)
+        elif self.aggregation_fun == "min":
+            return min(weights)
+        elif self.aggregation_fun == "max":
+            return max(weights)
+        elif self.aggregation_fun == "arit_mean":
+            return np.mean(weights)
+        else:
+            raise Exception(f"Unknown aggregation function {self.aggregation_fun}")
 
     def update_rules(self, input_vars: list[LinguisticVariable], output_var: LinguisticVariable,
                       values_io:list[float], var_names:list[str]) -> None:
-        """Updates rule base (same as original rules_database)."""
+        """Updates rule base (learns new rules or updates existing ones)."""
         terms_list, weight_list = [], []
 
         fuzzy_vars = input_vars + [output_var]
@@ -119,13 +135,25 @@ class FuzzyRuleManager:
             terms_list.append(term)
             weight_list.append(weight)
 
-        new_weight = reduce(lambda x, y: x * y, weight_list)
+        new_weight = self._aggregate_weights(weight_list)
         new_rule = self.build_rule(var_names[:-1], var_names[-1], terms_list)
 
         if not any(new_rule[:new_rule.find('THEN')] in item for item in self.rules) or len(self.rules) == 0:
-            self.rules.append(new_rule)
-            self.weights.append(new_weight)
-            self.usage_count.append(0)
+            # Check maximum rules limit
+            if self.max_rules is not None and len(self.rules) >= self.max_rules:
+                tqdm.write(f"Replacing rule {idx}: old_weight = {self.weights[idx]} -> new_weight = {new_weight}.")
+                # Replace weakest rule
+                idx = np.argmin(self.weights)
+                self.rules[idx] = new_rule
+                self.weights[idx] = new_weight
+                self.usage_count[idx] = 0
+                self.error_contribution[idx] = 0.0
+            else:
+                tqdm.write(f"Add new rule: now the fuzzy uses {len(self.rules)+1} rules.", end='\r')
+                self.rules.append(new_rule)
+                self.weights.append(new_weight)
+                self.usage_count.append(0)
+                self.error_contribution.append(0.0)
         else:
             arr = np.array(self.rules)
             mask = np.core.defchararray.find(arr.astype(str), new_rule[:new_rule.find('THEN')])
@@ -133,41 +161,47 @@ class FuzzyRuleManager:
             if new_weight > old_weight:
                 self.rules[mask[0]] = new_rule
                 self.weights[mask[0]] = new_weight
-
-    def register_rule_usage(self) -> None:
+    
+    def register_rule_usage(self, prediction_error:float=None) -> None:
         """
-        Increment usage count for rules with weights above a certain threshold.
-        Note: This method should be called after each prediction.
+        Increment usage count for rules with weights above threshold.
+        Optionally register contribution to global error.new_rule
         """
-        
         for idx, weight in enumerate(self.weights):
             if weight > self.prune_weight_threshold:
                 self.usage_count[idx] += 1
+                if prediction_error is not None:
+                    self.error_contribution[idx] += abs(prediction_error)
 
     def prune_unused_rules(self) -> bool:
         """
-        Remove not used rules based on a sliding window approach.
-        Note: This method should be called after each prediction.
+        Remove unused or low-impact rules based on sliding window.
+        Returns True if pruning occurred.
         """
-        
         if self.prune_count >= self.prune_window:
-            to_remove = [i for i, count in enumerate(self.usage_count) if count <= self.prune_use_threshold]
+            to_remove = []
+            for i, count in enumerate(self.usage_count):
+                avg_error = self.error_contribution[i] / max(1, count)
+                if count <= self.prune_use_threshold and avg_error < self.prune_weight_threshold:
+                    to_remove.append(i)
+
             if len(to_remove) > 0:
-                tqdm.write(f"Pruning {len(to_remove)} rules out of {len(self.rules)} -> {len(self.rules) - len(to_remove)} remaining.")
+                tqdm.write(f"Pruning {len(to_remove)} rules out of {len(self.rules)} "
+                            f"-> {len(self.rules) - len(to_remove)} remaining.")
                 for idx in sorted(to_remove, reverse=True):
                     del self.rules[idx]
                     del self.weights[idx]
                     del self.usage_count[idx]
+                    del self.error_contribution[idx]
 
-            # After each pruning, reset usage counts
+            # Reset usage counters after pruning
             self.usage_count = [0 for _ in self.rules]
+            self.error_contribution = [0.0 for _ in self.rules]
             self.prune_count = 0
-            
             return True
         else:
             self.prune_count += 1
             return False
-
 
 class FuzzyTSModel:
     """Fuzzy model for time series forecasting."""
