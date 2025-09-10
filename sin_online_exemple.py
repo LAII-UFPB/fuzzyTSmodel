@@ -28,9 +28,7 @@ train_size = int(len(t)*0.5)
 x1t, x2t, x3t, yt = x1[:train_size], x2[:train_size], x3[:train_size], y[:train_size]
 Xt = np.vstack((x1t, x2t, x3t))
 Xt = Xt.T
-x1v, x2v, x3v, yv = x1[train_size:], x2[train_size:], x3[train_size:] ,y[train_size:]
-Xv = np.vstack((x1v, x2v, x3v))
-Xv = Xv.T
+yv = y[train_size:]
 plt.plot(t[3:train_size+3], yt, label="Train")
 plt.plot(t[train_size+3:], yv, label="Validation")
 plt.legend()
@@ -69,46 +67,38 @@ model.rule_manager.prune_window = 25
 
 # model prediction
 
-# let's say that the input validation data is received online in small batches of 10 each t=0.1s 
-# and the true output is received after t=0.2s, showing the past true results
-# we will predict the output for each small batch received and after receiving the true output 
+# let's say we receive the data at each 0.1s, after 0.3s we will have enough data to make a prediction
+# to the 0.4s point, then at 0.5s we will have the true output for the 0.4s point, and so on.
+# we will predict the output for each new input data point received
 # check if the absolute error is above a certain threshold
 # if so, we will update the model with the new data
 # here we simulate this process
-y_pred = []
-batch_size = 10
-for i in range(0, len(Xv), batch_size):
-    X_batch = Xv[i:i+batch_size]
-    y_batch = yv[i:i+batch_size]
-    
-    # predict the output for the current batch
-    y_batch_pred = model.predict(X_batch)
-    y_pred.extend(y_batch_pred)
 
-    plt.plot(range(0, i+len(y_batch_pred)), y_pred, label="Fuzzy Pred")
-    plt.plot(range(0, i+len(y_batch)), yv[0:i+batch_size], label="Real")
-    plt.legend()
-    plt.title("Online Prediction")
+y_pred = [0 for i in range(3)]  # initial predictions for the first 3 points (not predicted)
+y_true = []
+abs_error_threshold = 0.01
+for i in range(len(yv)):
+    if i>0:
+        y_true.append(yv[i-1])  # append the true output we are receiving now
+    if i<3:
+        continue
+
+    # prepare the new input data point
+    x1v, x2v, x3v = yv[i-1], yv[i-2], yv[i-3]  # using the true past values as input
+    x_new = np.array([[x1v, x2v, x3v]])  # new input data point
+
+
+    # the prediction and update
+    y_new_pred = model.predict_and_update(x_new)[0]  # predict the output for the new input data point
+    y_pred.append(y_new_pred)
+    
+    plt.plot(range(len(y_pred)), y_pred, label="Fuzzy Pred")
+    plt.plot(range(len(y_true)), y_true, label="Real")
+    plt.title("Online Prediction: Real vs Fuzzy Predicted")
     plt.grid()
-    plt.pause(0.1)  # pause to simulate real-time plotting
-    plt.clf()  # clear the figure for the next batch
-    
-    # simulate waiting for the true output to be received
-    time.sleep(0.1)  # wait for 0.1s (simulating delay)
-    
-    # after receiving the true output, check the error and update the model if necessary
-    if len(y_batch) == len(y_batch_pred):  # ensure we have true values to compare
-        model.predict_and_update(X_batch, y_true=y_batch, abs_error_threshold=0.01)
-    time.sleep(0.1)  # wait for another 0.1s (simulating delay)
+    plt.legend()
+    plt.pause(0.05)  # pause to update the plot 
+    plt.clf()  # clear the plot for the next iteration
 
 
-y_pred = np.array(y_pred)
-plt.title("Validation data: Real vs Fuzzy Predicted")
-plt.plot(yv, label="Real")
-plt.plot(y_pred, label="Fuzzy Pred")
-plt.grid()
-plt.legend()
-plt.show()
-## Metrics
-#results = model.score(y_pred=y_pred, y_true=yv)
-#print(f"MAE: {results['MAE']}\nMAPE: {results['MAPE']}\nRMSE: {results['RMSE']}\nR2: {results['R2']}")
+    time.sleep(0.1)  # simulate waiting for new data point
