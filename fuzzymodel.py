@@ -204,138 +204,146 @@ class FuzzyRuleManager:
             return False
 
 class FuzzyTSModel:
-    """Fuzzy model for time series forecasting with adaptive rule management."""
+    """Fuzzy model for time series forecasting with adaptive rule management (multi-output)."""
 
     def __init__(self, input_names:list, output_name:str, N:int, input_range:list, output_range:list,
-                 max_rules:int=None, aggregation_fun="product", error_threshold:float=0.05):
+                 max_rules:int=None, aggregation_fun="product", horizon:int=1):
+        """
+        Args:
+            input_names (list): Names of input variables
+            output_name (str): Base name of output variable(s)
+            horizon (int): Number of steps ahead to predict (multi-output size)
+        """
         self.input_names = input_names
         self.output_name = output_name
+        self.horizon = horizon
         self.var_manager = FuzzyVariableManager(N, input_range, output_range)
-        self.rule_manager = FuzzyRuleManager(max_rules=max_rules, aggregation_fun=aggregation_fun)
-        self.fs = FuzzySystem(show_banner=False)
+        self.rule_manager = {h: FuzzyRuleManager(max_rules=max_rules, aggregation_fun=aggregation_fun)
+                             for h in range(horizon)}
+        self.fs = {h: FuzzySystem(show_banner=False) for h in range(horizon)}
 
-        # Create variables
+        # Create input variables (shared across horizons)
         self.input_vars = [self.var_manager.create_variable(name) for name in input_names]
-        self.output_var = self.var_manager.create_variable(output_name, is_output=True)
+        for h in range(horizon):
+            for name, var in zip(self.input_names, self.input_vars):
+                self.fs[h].add_linguistic_variable(name, var)
 
-        # Add variables to fuzzy system
-        self.fs.add_linguistic_variable(self.output_name, self.output_var)
-        for name, var in zip(self.input_names, self.input_vars):
-            self.fs.add_linguistic_variable(name, var)
-        
-        # Useful for adaptive pruning
+        # Create one output variable per horizon
+        self.output_vars = []
+        for h in range(horizon):
+            out_name = f"{self.output_name}_{h+1}"
+            lv = self.var_manager.create_variable(out_name, is_output=True)
+            self.output_vars.append(lv)
+            self.fs[h].add_linguistic_variable(out_name, lv)
+
         self.X_train_dim = None
 
-    def fit(self, X:np.ndarray, y:np.ndarray) -> None:
-        """Batch learning of fuzzy rules from dataset."""
-        assert X.shape[0] == y.shape[0], "X and y must have same first dimension"
+    def fit(self, X:np.ndarray, Y:np.ndarray) -> None:
+        """Batch learning of fuzzy rules for multi-output.
+        X.shape = (n_samples, n_features)
+        Y.shape = (n_samples, horizon)
+        """
+        assert X.shape[0] == Y.shape[0], "X and Y must have same first dimension"
+        assert Y.shape[1] == self.horizon, "Y second dimension must equal horizon"
         self.X_train_dim = X.shape
 
-        for xi, yi in tqdm(zip(X, y), total=X.shape[0], desc="Fitting model"):
-            values_io = list(xi) + [yi]
-            self.rule_manager.update_rules(self.input_vars, self.output_var, values_io,
-                                           self.input_names + [self.output_name])
-        self.fs.add_rules(self.rule_manager.rules)
+        for h in range(self.horizon):
+            out_name = f"{self.output_name}_{h+1}"
+            for xi, yi in tqdm(zip(X, Y[:, h]), total=X.shape[0], desc=f"Fitting model (h={h+1})"):
+                values_io = list(xi) + [yi]
+                self.rule_manager[h].update_rules(self.input_vars, self.output_vars[h], values_io,
+                                                  self.input_names + [out_name])
+            self.fs[h].add_rules(self.rule_manager[h].rules)
 
-    def partial_fit(self, xi:np.ndarray, yi:float) -> None:
+    def partial_fit(self, xi:np.ndarray, yi:np.ndarray) -> None:
         """
         Online update with a single sample (incremental learning).
         Args:
-            xi (np.ndarray): Input vector
-            yi (float): Target value
+            xi (np.ndarray): Input vector, shape (n_features,)
+            yi (np.ndarray): Target vector, shape (horizon,)
         """
-        values_io = list(xi) + [yi]
-        self.rule_manager.update_rules(self.input_vars, self.output_var, values_io,
-                                       self.input_names + [self.output_name])
-        self.fs._rules.clear()
-        self.fs.add_rules(self.rule_manager.rules)
+        assert yi.shape[0] == self.horizon, "yi must have length equal to horizon"
+        for h in range(self.horizon):
+            out_name = f"{self.output_name}_{h+1}"
+            values_io = list(xi) + [yi[h]]
+            self.rule_manager[h].update_rules(self.input_vars, self.output_vars[h], values_io,
+                                              self.input_names + [out_name])
+            self.fs[h]._rules.clear()
+            self.fs[h].add_rules(self.rule_manager[h].rules)
 
-    def predict(self, X:np.ndarray, y_true:np.ndarray=None) -> np.ndarray:
+    def predict(self, X:np.ndarray, Y_true:np.ndarray=None) -> np.ndarray:
         """
-        Predict output for given input data.
-        Optionally receives y_true to track error contribution for pruning.
+        Predict outputs for given inputs.
+        Returns np.ndarray of shape (n_samples, horizon)
         """
-        assert X.shape[1:] == self.X_train_dim[1:], "Input shape mismatch"
+        if self.X_train_dim is None:
+            # Initialize expected input dimension on the fly
+            self.X_train_dim = X.shape
+            print(f"Warning: Model was not trained. Setting expected input dimension to {self.X_train_dim}.")
         
-        predictions = []
+        preds_all = []
         for idx, xi in enumerate(tqdm(X, total=X.shape[0], desc="Predicting")):
-            for name, val in zip(self.input_names, xi):
-                self.fs.set_variable(name, val)
-            result = self.fs.inference()
-            
-            y_pred = result[self.output_name]
-            predictions.append(y_pred)
+            preds = []
+            for h in range(self.horizon):
+                fs = self.fs[h]
+                for name, val in zip(self.input_names, xi):
+                    fs.set_variable(name, val)
+                result = fs.inference()
+                y_pred = result[f"{self.output_name}_{h+1}"]
+                preds.append(y_pred)
 
-            # Rule usage + adaptive pruning
-            error = None
-            if y_true is not None:
-                error = y_true[idx] - y_pred
+                # Rule usage + pruning
+                error = None
+                if Y_true is not None:
+                    error = Y_true[idx, h] - y_pred
+                self.rule_manager[h].register_rule_usage(prediction_error=error)
+                if self.rule_manager[h].prune_unused_rules():
+                    assert len(self.rule_manager[h].rules) > 0, "All rules were pruned."
+                    fs._rules.clear()
+                    fs.add_rules(self.rule_manager[h].rules)
 
-            self.rule_manager.register_rule_usage(prediction_error=error)
-            if self.rule_manager.prune_unused_rules():
-                assert len(self.rule_manager.rules) > 0, "All rules were pruned. Adjust pruning parameters."
-                self.fs._rules.clear()
-                self.fs.add_rules(self.rule_manager.rules)
-        
-        return np.array(predictions)
+            preds_all.append(preds)
+        return np.array(preds_all)
 
-    def explain(self) -> list[str]:
-        """Return current rule base as list of strings."""
-        return self.rule_manager.rules
-
-    def score(self, y_pred: np.ndarray, y_true: np.ndarray) -> dict:
-        """Compute prediction error metrics."""
-        mae = mean_absolute_error(y_true, y_pred)
-        mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
-        rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
-        r2 = r2_score(y_true, y_pred)
-        return {"MAE": mae, "MAPE": mape, "RMSE": rmse, "R2": r2}
-
-    def predict_and_update(self, X: np.ndarray, y_true: np.ndarray=None,
-                       abs_error_threshold: float=0.05, rel_error_threshold: float=None,
-                       verbose: bool=True) -> np.ndarray:
+    def predict_and_update(self, X: np.ndarray, Y_true: np.ndarray=None,
+                           abs_error_threshold: float=0.05, rel_error_threshold: float=None,
+                           verbose: bool=True) -> np.ndarray:
         """
-        Predict and optionally update rules online if prediction error exceeds thresholds.
-        This version uses small batch prediction for efficiency.
-
-        Args:
-            X (np.ndarray): Input samples, shape (n_samples, n_features).
-            y_true (np.ndarray): Ground truth values, shape (n_samples,).
-            abs_error_threshold (float): Absolute error threshold for update.
-            rel_error_threshold (float): Relative error threshold (percentage). Optional.
-            verbose (bool): Whether to print updates when model learns online.
+        Predict and optionally update rules online if error exceeds thresholds.
+        Multi-output version.
         """
-        # Standard prediction
-        y_pred = self.predict(X)
+        Y_pred = self.predict(X)
 
-        # If no ground truth, return predictions only
-        if y_true is None:
-            return y_pred
+        if Y_true is None:
+            return Y_pred
 
-        # Compute errors in batch
-        abs_errors = np.abs(y_true - y_pred)
+        abs_errors = np.abs(Y_true - Y_pred)
 
-        # Relative error only if requested
-        rel_errors = None
-        if rel_error_threshold is not None:
-            rel_errors = np.zeros_like(abs_errors)
-            nonzero_mask = np.abs(y_true) > 1e-8 # avoid division by zero
-            rel_errors[nonzero_mask] = abs_errors[nonzero_mask] / np.abs(y_true[nonzero_mask])
-
-        # Decide which samples trigger update
-        for xi, yi, yp, err in zip(X, y_true, y_pred, abs_errors):
+        for xi, yi, yp, errs in zip(X, Y_true, Y_pred, abs_errors):
             update = False
-            if abs_error_threshold is not None and err > abs_error_threshold:
-                update = True
-            if rel_error_threshold is not None and rel_errors is not None:
-                idx = np.where(y_true == yi)[0][0]  # index of current sample
-                if rel_errors[idx] > rel_error_threshold:
+            for h, err in enumerate(errs):
+                if abs_error_threshold is not None and err > abs_error_threshold:
                     update = True
-
+                if rel_error_threshold is not None and abs(yi[h]) > 1e-8:
+                    rel_err = err / abs(yi[h])
+                    if rel_err > rel_error_threshold:
+                        update = True
             if update:
                 if verbose:
-                    tqdm.write(f"Updating model: y_true={yi}, y_pred={yp:.4f}, abs_err={err:.4f}")
+                    tqdm.write(f"Updating model: y_true={yi}, y_pred={yp}, abs_errs={errs}")
                 self.partial_fit(xi, yi)
 
-        return y_pred
+        return Y_pred
+
+    def explain(self) -> dict:
+        """Return rule base per horizon."""
+        return {f"h{h+1}": self.rule_manager[h].rules for h in range(self.horizon)}
+
+    def score(self, Y_pred: np.ndarray, Y_true: np.ndarray) -> dict:
+        """Compute error metrics averaged across horizons."""
+        mae = mean_absolute_error(Y_true, Y_pred)
+        mape = np.mean(np.abs((Y_true - Y_pred) / (Y_true + 1e-8))) * 100
+        rmse = np.sqrt(np.mean((Y_true - Y_pred) ** 2))
+        r2 = r2_score(Y_true.flatten(), Y_pred.flatten())
+        return {"MAE": mae, "MAPE": mape, "RMSE": rmse, "R2": r2}
 
