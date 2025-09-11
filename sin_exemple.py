@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from fuzzymodel import FuzzyTSModel
@@ -60,6 +61,19 @@ var1.plot()
 
 # model train
 model.fit(Xt, yt)
+
+#################################################################################################
+## Here we're saving and loading the model just for exemple usage, but it's not necessary to do it
+# you can load a model in a new code and not  
+# saving the model
+model_name = 'fuzzyTS_sin_exemple'
+path_to_save = os.path.join(os.getcwd(), 'models', model_name)
+model.save(path_to_save)
+
+# loading model
+path_to_load = path_to_save+'.npz'
+model.load(path_to_load)
+#################################################################################################
 
 # pruning parameters
 model.rule_manager.prune_weight_threshold = 0.1

@@ -339,3 +339,18 @@ class FuzzyTSModel:
 
         return y_pred
 
+    def save(self, path:str) -> None:
+        """Save rules and weights to file."""
+        np.savez(path, rules=self.rule_manager.rules,
+                       weights=self.rule_manager.weights,
+                       usage=self.rule_manager.usage_count)
+
+    def load(self, path:str) -> None:
+        """Load rules and weights from file."""
+        data = np.load(path, allow_pickle=True)
+        self.rule_manager.rules = data["rules"].tolist()
+        self.rule_manager.weights = data["weights"].tolist()
+        self.rule_manager.usage_count = data["usage"].tolist()
+        self.rule_manager.error_contribution = [0.0 for _ in self.rule_manager.rules]
+        self.fs._rules.clear()
+        self.fs.add_rules(self.rule_manager.rules)
