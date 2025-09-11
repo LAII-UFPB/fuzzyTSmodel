@@ -64,12 +64,13 @@ class FuzzyRuleManager:
     """Manages a fuzzy rule base with adaptive learning and forgetting."""
 
     def __init__(self, prune_weight_threshold:float=0.1, prune_use_threshold:int=0,
-                 prune_window:int=15, max_rules:int=None, aggregation_fun="product"):
+                 prune_window:int=15, update_rule_window:int=15,max_rules:int=None, aggregation_fun="product"):
         """
         Args:
             prune_weight_threshold (float): Minimum weight for a rule to be considered used.
             prune_use_threshold (int): Minimum number of uses for a rule to be retained.
             prune_window (int): Number of predictions after which to evaluate rule usage.
+            update_rule_window (int): Number of samples after which to consider adding new rules.
             max_rules (int): Maximum number of rules to store. None = unlimited.
             aggregation_fun (str or callable): Aggregation function for pertinence values
                                                ("product", "min", "max", "arit_mean" or callable).
@@ -84,6 +85,7 @@ class FuzzyRuleManager:
         self.prune_weight_threshold = prune_weight_threshold
         self.prune_use_threshold = prune_use_threshold
         self.prune_window = prune_window
+        self.update_rule_window = update_rule_window
         self.max_rules = max_rules
         self.aggregation_fun = aggregation_fun
 
@@ -207,11 +209,12 @@ class FuzzyTSModel:
     """Fuzzy model for time series forecasting with adaptive rule management."""
 
     def __init__(self, input_names:list, output_name:str, N:int, input_range:list, output_range:list,
-                 max_rules:int=None, aggregation_fun="product", error_threshold:float=0.05):
+                 update_rule_window:int=15,max_rules:int=None, aggregation_fun="product"):
         self.input_names = input_names
         self.output_name = output_name
         self.var_manager = FuzzyVariableManager(N, input_range, output_range)
-        self.rule_manager = FuzzyRuleManager(max_rules=max_rules, aggregation_fun=aggregation_fun)
+        self.rule_manager = FuzzyRuleManager(max_rules=max_rules, update_rule_window=update_rule_window,
+                                             aggregation_fun=aggregation_fun)
         self.fs = FuzzySystem(show_banner=False)
 
         # Create variables
@@ -305,37 +308,43 @@ class FuzzyTSModel:
             rel_error_threshold (float): Relative error threshold (percentage). Optional.
             verbose (bool): Whether to print updates when model learns online.
         """
-        # Standard prediction
-        y_pred = self.predict(X)
+        # Standard batch prediction
+        update_rule_window = self.rule_manager.update_rule_window if y_true is not None else X.shape[0] # no updates if y_true not provided
+        y_pred = np.zeros(X.shape[0]) # output vector
+        
+        
+        for start in range(0, X.shape[0], update_rule_window):
+            end = min(start + update_rule_window, X.shape[0])
+            X_batch = X[start:end]
+            y_batch_true = y_true[start:end] if y_true is not None else None
+            y_batch_pred = self.predict(X_batch, y_true=y_batch_true)
 
-        # If no ground truth, return predictions only
-        if y_true is None:
-            return y_pred
+            # Compute errors
+            abs_errors = np.abs(y_batch_true - y_batch_pred) if y_true is not None else None
 
-        # Compute errors in batch
-        abs_errors = np.abs(y_true - y_pred)
+            # Relative error only if requested
+            rel_errors = None
+            if rel_error_threshold is not None:
+                rel_errors = np.zeros_like(abs_errors)
+                nonzero_mask = np.abs(y_batch_true) > 1e-8 # avoid division by zero
+                rel_errors[nonzero_mask] = abs_errors[nonzero_mask] / np.abs(y_batch_true[nonzero_mask])
 
-        # Relative error only if requested
-        rel_errors = None
-        if rel_error_threshold is not None:
-            rel_errors = np.zeros_like(abs_errors)
-            nonzero_mask = np.abs(y_true) > 1e-8 # avoid division by zero
-            rel_errors[nonzero_mask] = abs_errors[nonzero_mask] / np.abs(y_true[nonzero_mask])
-
-        # Decide which samples trigger update
-        for xi, yi, yp, err in zip(X, y_true, y_pred, abs_errors):
-            update = False
-            if abs_error_threshold is not None and err > abs_error_threshold:
-                update = True
-            if rel_error_threshold is not None and rel_errors is not None:
-                idx = np.where(y_true == yi)[0][0]  # index of current sample
-                if rel_errors[idx] > rel_error_threshold:
+            # Decide which samples trigger update
+            for xi, yi, yp, err in zip(X_batch, y_batch_true, y_batch_pred, abs_errors):
+                update = False
+                if abs_error_threshold is not None and err > abs_error_threshold:
                     update = True
+                if rel_error_threshold is not None and rel_errors is not None:
+                    idx = np.where(y_true == yi)[0][0]  # index of current sample
+                    if rel_errors[idx] > rel_error_threshold:
+                        update = True
 
-            if update:
-                if verbose:
-                    tqdm.write(f"Updating model: y_true={yi}, y_pred={yp:.4f}, abs_err={err:.4f}")
-                self.partial_fit(xi, yi)
+                if update:
+                    if verbose:
+                        tqdm.write(f"Updating model: y_true={yi}, y_pred={yp:.4f}, abs_err={err:.4f}")
+                    self.partial_fit(xi, yi)
+
+            y_pred[start:end] = y_batch_pred
 
         return y_pred
 

@@ -46,8 +46,8 @@ input_range = [-1.5, 1.5]
 output_range = input_range
 
 # create the fuzzy model
-model = FuzzyTSModel(input_names=["var1", "var2", "var3"], output_name= "out", N=6,
-                          input_range=input_range, output_range=output_range)
+model = FuzzyTSModel(input_names=["var1", "var2", "var3"], output_name= "out", N=6, update_rule_window=50, 
+                     input_range=input_range, output_range=output_range)
 
 # visualizing the created variables 
 # here we visualize only the first input variable 

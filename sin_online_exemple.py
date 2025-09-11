@@ -126,7 +126,7 @@ for i in range(len(yv)):
     x_new = get_input_window(y_true, y_pred, horizon=N_HORIZON)
 
     # make new prediction
-    y_new_pred = model.predict_and_update(x_new)[0]
+    y_new_pred = model.predict(x_new)[0]
     y_pred.append(y_new_pred)
 
     # online plotting
