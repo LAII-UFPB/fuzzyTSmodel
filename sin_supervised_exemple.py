@@ -58,8 +58,13 @@ HORIZON = 3
 t = np.linspace(0, 20*np.pi, 2000)
 y = np.sin(t) + 0.1*np.random.randn(len(t))  # noisy sine
 
+# train data
+train_samples = int(0.2*len(y)) # 20% of the total samples
+train_data = y[:train_samples]
+Xt,yt = build_supervised(train_data, N_LAGS, HORIZON)
+
 # Create generator
-stream = stream_supervised(y, N_LAGS, HORIZON)
+stream = stream_supervised(y[train_samples:], N_LAGS, HORIZON)
 
 # Online simulation
 model = FuzzyTSModel(
@@ -71,14 +76,31 @@ model = FuzzyTSModel(
     horizon=HORIZON
 )
 
+model.fit(Xt, yt)
+
+y_true = []
+y_pred = []
 for step, (x_i, y_i) in enumerate(stream):
     if y_i is None:
         break  # no more future ground truth
     # predict
-    y_pred = model.predict(np.array([x_i]))
+    y_p = model.predict(np.array([x_i]))
+    y_pred.extend(y_p)
+
+    
+    if step % 100 == 0:
+        print(f"Step {step}: x_i={x_i[-3:]}, y_true={y_i}, y_pred={y_p}")
+
+    # online plotting
+    plt.plot(range(len(y_pred)), y_pred, label="Fuzzy Pred")
+    plt.plot(range(len(y_true)), y_true, label="Real")
+    plt.title("Online Prediction: Real vs Fuzzy Predicted")
+    plt.grid()
+    plt.legend()
+    plt.pause(0.05)
+    plt.clf()
+
     # update if needed
     model.predict_and_update(np.array([x_i]), np.array([y_i]), abs_error_threshold=0.1, verbose=False)
-
-    if step % 100 == 0:
-        print(f"Step {step}: x_i={x_i[-3:]}, y_true={y_i}, y_pred={y_pred}")
+    y_true.append(y_i)
 
