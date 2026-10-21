@@ -1,9 +1,16 @@
-import numpy as np
-import matplotlib.pyplot as plt
-from fuzzymodel import FuzzyTSModel
+"""EXPERIMENTAL — previsão online com múltiplos horizontes. Ainda em desenvolvimento.
+
+Não faz parte do método de Wang-Mendel: é uma extensão que reaprende regras
+enquanto novos dados chegam. Veja examples/01_sine_wang_mendel.py para o fluxo
+padrão.
+"""
+
 import time
 
-# THIS EXAMPLE IS NOT FINISHED YET
+import numpy as np
+import matplotlib.pyplot as plt
+
+from fuzzytsmodel import FuzzyTSModel
 
 # ====================== Parameters ======================
 N_LAGS = 3          # number of past values used as input (easy to change!)

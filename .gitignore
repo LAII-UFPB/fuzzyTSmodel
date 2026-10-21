@@ -1,1 +1,6 @@
-__pycache__
+__pycache__/
+*.pyc
+.venv/
+models/*.npz
+.pytest_cache/
+.ipynb_checkpoints/

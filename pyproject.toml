@@ -1,7 +1,11 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "fuzzytsmodel"
-version = "0.1.0"
-description = "Fuzzy model with automatic rule selection for time series forecasting"
+version = "0.2.0"
+description = "Geração automática de regras fuzzy (Wang-Mendel) para previsão de séries temporais"
 authors = [{ name = "Vitor França", email = "vitor.sousa.franca@gmail.com" }]
 license = "MIT"
 readme = "README.md"
@@ -9,8 +13,21 @@ requires-python = ">=3.10"
 dependencies = [
     "matplotlib>=3.10.6",
     "numpy>=2.2.6",
-    "pyqt6>=6.9.1",
     "scikit-learn>=1.7.1",
     "simpful>=2.12.0",
     "tqdm>=4.67.1",
 ]
+
+[project.optional-dependencies]
+# Backend gráfico interativo para os scripts de examples/.
+gui = ["pyqt6>=6.9.1"]
+dev = ["pytest>=8.0", "jupyter>=1.1", "nbconvert>=7.16"]
+
+[project.urls]
+Repository = "https://github.com/LAII-UFPB/fuzzyTSmodel"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fuzzytsmodel"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
